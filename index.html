@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Israel's Game Computer Science P2 — 3D Shooter Demo</title>
+  <!-- Three.js from CDN -->
+  <script src="https://unpkg.com/three@0.155.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.155.0/examples/js/controls/PointerLockControls.js"></script>
+  <script src="https://unpkg.com/three@0.155.0/examples/js/postprocessing/EffectComposer.js"></script>
+  <script src="https://unpkg.com/three@0.155.0/examples/js/postprocessing/RenderPass.js"></script>
+  <script src="https://unpkg.com/three@0.155.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+
+  <style>
+    html,body{height:100%;margin:0;font-family:Inter, Arial, sans-serif;background:#0b1220;color:#e6eef8}
+    #overlay{position:fixed;inset:0;display:flex;align-items:flex-start;justify-content:center;pointer-events:none}
+    #ui{pointer-events:auto;margin:18px;max-width:1200px;width:calc(100% - 36px);}
+    header{display:flex;justify-content:space-between;align-items:center}
+    h1{margin:0;font-size:20px}
+    .panel{background:rgba(10,15,25,0.6);backdrop-filter:blur(6px);border-radius:10px;padding:10px;color:#dfeeff}
+    #hud{position:fixed;top:18px;left:18px;padding:10px;border-radius:8px}
+    #score{font-size:18px;font-weight:700}
+    #canvasContainer{width:100%;height:calc(100vh - 120px);display:block;margin-top:12px;border-radius:8px;overflow:hidden}
+    canvas{display:block;width:100%;height:100%}
+    button{background:#2b7be3;border:none;color:white;padding:8px 12px;border-radius:6px;cursor:pointer}
+    button.secondary{background:#5a6b7a}
+    #menu{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:640px;max-width:95%;}
+    .muted{opacity:0.8;font-size:13px}
+    .small{font-size:13px}
+    #instructions{margin-top:8px;color:#cfe8ff}
+    footer{position:fixed;bottom:12px;left:12px;color:#9fb8d9}
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <div id="ui" class="panel">
+      <header>
+        <h1>Israel's Game — Computer Science P2</h1>
+        <div>
+          <span id="difficultyText" class="muted">Difficulty: <strong id="difficulty">Normal</strong></span>
+          &nbsp;&nbsp;
+          <button id="startBtn">Start</button>
+          <button id="pauseBtn" class="secondary">Pause</button>
+        </div>
+      </header>
+      <div style="display:flex;gap:12px;margin-top:10px;align-items:center;">
+        <div id="hud" class="panel small">
+          <div>Score: <span id="score">0</span></div>
+          <div>Health: <span id="health">100</span></div>
+          <div>Enemies: <span id="enemiesCount">0</span></div>
+        </div>
+        <div style="flex:1" class="muted small">Controls: Move with WASD (or arrow keys). Mouse to look. Left-click to shoot. Space to jump. R to respawn. F to toggle fullscreen. Esc to unlock pointer.</div>
+      </div>
+      <div id="canvasContainer">
+        <canvas id="gameCanvas"></canvas>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:8px;align-items:center">
+        <div class="muted small">High Score: <strong id="highScore">0</strong></div>
+        <div class="muted small">Version: 1.0 (Demo)</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="menu" class="panel" style="display:block">
+    <h2 style="margin-top:0">Instructions & Settings</h2>
+    <p class="muted">This is a single-file 3D shooter demo built with Three.js. It includes movement, shooting, simple AI enemies, collisions, a HUD, basic particles, audio SFX (generated), and localStorage high score. It's intentionally self-contained so you can open <code>index.html</code> in a browser and play.</p>
+    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+      <label class="small">Difficulty:
+        <select id="difficultySelect">
+          <option>Easy</option>
+          <option selected>Normal</option>
+          <option>Hard</option>
+        </select>
+      </label>
+      <label class="small">Music:
+        <input type="checkbox" id="musicToggle" checked />
+      </label>
+      <label class="small">SFX:
+        <input type="checkbox" id="sfxToggle" checked />
+      </label>
+      <button id="hideMenu">Got it — Play</button>
+    </div>
+    <div id="instructions" class="small">Tip: Click 'Got it — Play' and then click inside the game area to lock the mouse. Use the controls listed above. This demo uses simple geometry rather than 3D models to keep the file single-file and easy to share.</div>
+  </div>
+
+  <footer>Made for: Israel Flores — Computer Science P2</footer>
+
+  <script>
+  // =====================
+  // Basic setup & helpers
+  // =====================
+  const canvas = document.getElementById('gameCanvas');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio ? Math.min(window.devicePixelRatio, 2) : 1);
+  renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
+
+  const scene = new THREE.Scene();
+  scene.fog = new THREE.FogExp2(0x0b1220, 0.0025);
+
+  const camera = new THREE.PerspectiveCamera(75, canvas.clientWidth / canvas.clientHeight, 0.1, 2000);
+  camera.position.set(0, 2, 8);
+
+  // Composer for bloom
+  let composer;
+  try {
+    const renderScene = new THREE.RenderPass(scene, camera);
+    const bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(canvas.clientWidth, canvas.clientHeight), 0.6, 0.4, 0.85);
+    composer = new THREE.EffectComposer(renderer);
+    composer.addPass(renderScene);
+    composer.addPass(bloomPass);
+  } catch(e){ composer = null; }
+
+  // Resize handling
+  function onResize(){
+    const w = canvas.clientWidth || window.innerWidth;
+    const h = canvas.clientHeight || window.innerHeight;
+    camera.aspect = w/h; camera.updateProjectionMatrix();
+    renderer.setSize(w,h,false);
+    if(composer) composer.setSize(w,h);
+  }
+  window.addEventListener('resize', onResize, false);
+
+  // Simple audio SFX generator (WebAudio) — no external files
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const audioCtx = AudioCtx ? new AudioCtx() : null;
+  function playBeep(freq=440, duration=0.06, type='sine', gain=0.05){
+    if(!audioCtx || !sfxEnabled) return;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.value = gain;
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(); o.stop(audioCtx.currentTime + duration);
+  }
+
+  // =====================
+  // World: lights, ground
+  // =====================
+  const hemi = new THREE.HemisphereLight(0xbfe8ff, 0x202a3a, 0.9);
+  scene.add(hemi);
+  const dir = new THREE.DirectionalLight(0xffffff, 0.6);
+  dir.position.set(5,10,7);
+  dir.castShadow = true;
+  scene.add(dir);
+
+  // Ground grid and simple plane
+  const groundMat = new THREE.MeshStandardMaterial({color:0x223344, roughness:0.9, metalness:0.05});
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(2000, 2000), groundMat);
+  ground.rotation.x = -Math.PI/2; ground.position.y = -0.01; ground.receiveShadow = true;
+  scene.add(ground);
+
+  // A small environment: rows of boxes as obstacles and cover
+  const boxes = new THREE.Group();
+  for(let i=-20;i<=20;i+=4){
+    for(let j=0;j<6;j++){
+      const w = 1+Math.random()*3;
+      const h = 1+Math.random()*4;
+      const d = 1+Math.random()*3;
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), new THREE.MeshStandardMaterial({color: new THREE.Color().setHSL(0.6,0.4,0.2 + Math.random()*0.3)}));
+      mesh.position.set(i*6 + (Math.random()-0.5)*2, h/2 - 0.5, -j*20 - (Math.random()*10));
+      mesh.userData.static = true;
+      boxes.add(mesh);
+    }
+  }
+  scene.add(boxes);
+
+  // Sky gradient — big sphere with shader-like gradient using two-sided material
+  const skyGeo = new THREE.SphereGeometry(800, 32, 15);
+  const skyMat = new THREE.MeshBasicMaterial({color:0x041223, side:THREE.BackSide});
+  const sky = new THREE.Mesh(skyGeo, skyMat);
+  scene.add(sky);
+
+  // =====================
+  // Player
+  // =====================
+  const player = {
+    height: 1.8,
+    speed: 8, // units per second
+    pos: new THREE.Vector3(0,1.8,0),
+    vel: new THREE.Vector3(0,0,0),
+    canJump: true,
+    health: 100
+  };
+
+  // A visible "body" (for debugging, invisible in first-person)
+  const bodyGeometry = new THREE.BoxGeometry(0.6, player.height, 0.4);
+  const bodyMaterial = new THREE.MeshStandardMaterial({color:0x1f6feb, opacity:0.9, transparent:true});
+  const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+  body.position.copy(player.pos);
+  body.visible = false; // keep first-person
+  scene.add(body);
+
+  // Camera holder for smooth movement
+  const cameraHolder = new THREE.Object3D();
+  cameraHolder.position.copy(player.pos);
+  scene.add(cameraHolder);
+  cameraHolder.add(camera);
+  camera.position.set(0, 0, 0);
+
+  // PointerLock controls
+  const controls = new THREE.PointerLockControls(camera, canvas);
+  document.addEventListener('click', () => { if(!controls.isLocked) controls.lock(); });
+  controls.addEventListener('lock', ()=>{ document.getElementById('menu').style.display='none'; });
+  controls.addEventListener('unlock', ()=>{ document.getElementById('menu').style.display='block'; });
+
+  // =====================
+  // Weapons, bullets, particles
+  // =====================
+  const bullets = [];
+  const bulletSpeed = 60;
+  function shoot(){
+    if(!sfxEnabled) playBeep(600, 0.04, 'square', 0.02);
+    const dir = new THREE.Vector3();
+    camera.getWorldDirection(dir);
+    const origin = new THREE.Vector3();
+    camera.getWorldPosition(origin);
+    const sphere = new THREE.Mesh(new THREE.SphereGeometry(0.12,6,6), new THREE.MeshBasicMaterial({color:0xfff5d0}));
+    sphere.position.copy(origin).add(dir.clone().multiplyScalar(1.5));
+    sphere.userData.velocity = dir.clone().multiplyScalar(bulletSpeed);
+    sphere.userData.life = 2.0;
+    sphere.userData.damage = 25;
+    bullets.push(sphere);
+    scene.add(sphere);
+  }
+
+  // Simple particle system for impacts
+  const particles = [];
+  function spawnParticles(position, color, n=12){
+    for(let i=0;i<n;i++){
+      const p = new THREE.Mesh(new THREE.SphereGeometry(0.06,4,4), new THREE.MeshBasicMaterial({color}));
+      p.position.copy(position);
+      p.userData.velocity = new THREE.Vector3((Math.random()-0.5)*6,(Math.random())*6,(Math.random()-0.5)*6);
+      p.userData.life = 0.8 + Math.random()*0.6;
+      particles.push(p); scene.add(p);
+    }
+  }
+
+  // =====================
+  // Enemies (simple AI)
+  // =====================
+  const enemies = [];
+  function spawnEnemy(position){
+    const g = new THREE.CapsuleGeometry(0.6, 1.0, 4, 8);
+    const mat = new THREE.MeshStandardMaterial({color:0xff6b6b});
+    const e = new THREE.Mesh(g, mat);
+    e.position.copy(position);
+    e.userData.health = 50 + Math.floor(Math.random()*50);
+    e.userData.speed = 1.2 + Math.random()*1.6;
+    e.userData.state = 'idle';
+    enemies.push(e); scene.add(e);
+  }
+
+  // initial enemies
+  for(let i=0;i<6;i++) spawnEnemy(new THREE.Vector3((Math.random()-0.5)*80,1.0,-30 - i*20));
+
+  // =====================
+  // Input handling
+  // =====================
+  const keys = {};
+  document.addEventListener('keydown',(e)=>{ keys[e.code]=true; if(e.code==='KeyR'){ respawn(); } if(e.code==='KeyF'){ toggleFullscreen(); } });
+  document.addEventListener('keyup',(e)=>{ keys[e.code]=false; });
+  canvas.addEventListener('mousedown',(e)=>{ if(e.button===0 && controls.isLocked) shoot(); });
+
+  // =====================
+  // Game state & UI
+  // =====================
+  let score=0; let highScore = parseInt(localStorage.getItem('israel_highscore')||'0',10); document.getElementById('highScore').innerText = highScore;
+  let isRunning=false; let sfxEnabled=true; let musicEnabled=true;
+  const startBtn = document.getElementById('startBtn');
+  const pauseBtn = document.getElementById('pauseBtn');
+  document.getElementById('difficultySelect').addEventListener('change', ()=>{document.getElementById('difficulty').innerText = document.getElementById('difficultySelect').value});
+  document.getElementById('hideMenu').addEventListener('click', ()=>{ document.getElementById('menu').style.display='none'; controls.lock(); startGame(); });
+  startBtn.addEventListener('click', startGame);
+  pauseBtn.addEventListener('click', ()=>{ isRunning = !isRunning; pauseBtn.innerText = isRunning ? 'Pause' : 'Resume'; });
+  document.getElementById('musicToggle').addEventListener('change', (e)=>{ musicEnabled = e.target.checked; });
+  document.getElementById('sfxToggle').addEventListener('change', (e)=>{ sfxEnabled = e.target.checked; });
+
+  function startGame(){
+    // reset state
+    score = 0; player.health = 100; bullets.forEach(b=>scene.remove(b)); bullets.length=0; enemies.forEach(e=>scene.remove(e)); enemies.length=0; particles.forEach(p=>scene.remove(p)); particles.length=0;
+    for(let i=0;i<6;i++) spawnEnemy(new THREE.Vector3((Math.random()-0.5)*80,1.0,-30 - i*20));
+    isRunning = true; document.getElementById('score').innerText = score; document.getElementById('health').innerText = player.health;
+    if(audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  }
+  function respawn(){ player.health=100; player.pos.set(0,1.8,6); cameraHolder.position.copy(player.pos); }
+  function toggleFullscreen(){ if(!document.fullscreenElement) document.documentElement.requestFullscreen(); else document.exitFullscreen(); }
+
+  // =====================
+  // Collision helpers
+  // =====================
+  function intersectsMeshSphere(mesh, pos, radius){
+    // approximate by bounding box
+    const box = new THREE.Box3().setFromObject(mesh);
+    return box.distanceToPoint(pos) <= radius;
+  }
+
+  // =====================
+  // Update loop
+  // =====================
+  let lastTime = performance.now()/1000;
+  function update(){
+    const now = performance.now()/1000; const dt = Math.min(0.05, now - lastTime); lastTime = now;
+    if(!isRunning){ render(); requestAnimationFrame(update); return; }
+
+    // Movement
+    const forward = new THREE.Vector3(); camera.getWorldDirection(forward); forward.y = 0; forward.normalize();
+    const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), forward).normalize();
+    let move = new THREE.Vector3();
+    if(keys['KeyW']||keys['ArrowUp']) move.add(forward);
+    if(keys['KeyS']||keys['ArrowDown']) move.sub(forward);
+    if(keys['KeyA']||keys['ArrowLeft']) move.add(right);
+    if(keys['KeyD']||keys['ArrowRight']) move.sub(right);
+    if(move.lengthSq()>0) move.normalize();
+    const speed = player.speed * (document.getElementById('difficultySelect').value === 'Hard' ? 1.15 : 1.0);
+    player.pos.add(move.multiplyScalar(speed * dt));
+    cameraHolder.position.lerp(player.pos, 0.18);
+
+    // Gravity & ground
+    player.vel.y -= 18 * dt; player.pos.y += player.vel.y * dt;
+    if(player.pos.y < 1.8){ player.pos.y = 1.8; player.vel.y = 0; player.canJump = true; }
+    if(keys['Space'] && player.canJump){ player.vel.y = 6; player.canJump = false; }
+
+    // Update body and camera holder
+    body.position.copy(player.pos);
+
+    // Update bullets
+    for(let i=bullets.length-1;i>=0;i--){
+      const b = bullets[i]; b.userData.life -= dt; if(b.userData.life<=0){ scene.remove(b); bullets.splice(i,1); continue; }
+      b.position.add(b.userData.velocity.clone().multiplyScalar(dt));
+
+      // Check collision vs enemies
+      for(let j=enemies.length-1;j>=0;j--){ const e=enemies[j]; if(intersectsMeshSphere(e,b.position,0.4)){ e.userData.health -= b.userData.damage; spawnParticles(b.position, 0xffcc66, 8); scene.remove(b); bullets.splice(i,1); if(e.userData.health<=0){ spawnParticles(e.position, 0xff6666, 20); scene.remove(e); enemies.splice(j,1); score+=10; document.getElementById('score').innerText = score; if(score>highScore){ highScore = score; localStorage.setItem('israel_highscore', highScore); document.getElementById('highScore').innerText = highScore; } } break; } }
+    }
+
+    // Update enemies
+    for(let i=enemies.length-1;i>=0;i--){ const e=enemies[i];
+      const toPlayer = player.pos.clone().sub(e.position); const dist = toPlayer.length();
+      if(dist > 0.001) toPlayer.normalize();
+      // Move toward player
+      e.position.add(toPlayer.multiplyScalar(e.userData.speed * dt));
+      // Simple attack
+      if(dist < 2.2){ if(!e.userData._lastAttack || now - e.userData._lastAttack > 1.0){ e.userData._lastAttack = now; player.health -= 10; if(!sfxEnabled) playBeep(120,0.06,'sawtooth',0.06); document.getElementById('health').innerText = player.health; spawnParticles(e.position,0xff6666,6); if(player.health<=0){ isRunning=false; showGameOver(); } } }
+    }
+    document.getElementById('enemiesCount').innerText = enemies.length;
+
+    // Update particles
+    for(let i=particles.length-1;i>=0;i--){ const p=particles[i]; p.userData.life -= dt; if(p.userData.life<=0){ scene.remove(p); particles.splice(i,1); continue; } p.position.add(p.userData.velocity.clone().multiplyScalar(dt)); p.userData.velocity.y -= 9.8 * dt; }
+
+    // Ambient enemy spawns for pacing
+    if(Math.random() < 0.012 * (document.getElementById('difficultySelect').value === 'Hard' ? 1.6 : 1.0)){
+      const x = (Math.random()-0.5)*120; const z = -60 - Math.random()*120; spawnEnemy(new THREE.Vector3(x,1.0,z));
+    }
+
+    render(); requestAnimationFrame(update);
+  }
+
+  function render(){
+    // Simple camera bobbing and sway
+    const t = performance.now()/1000;
+    cameraHolder.rotation.y *= 0.95;
+    if(composer){ composer.render(); } else { renderer.render(scene, camera); }
+  }
+
+  function showGameOver(){
+    // Display a lightweight modal in the UI
+    isRunning=false;
+    const m = document.getElementById('menu'); m.style.display='block';
+    m.querySelector('h2').innerText = 'Game Over';
+    m.querySelector('#instructions').innerText = 'You died. Press R to respawn and try again, or press "Got it — Play" to restart.';
+    if(score>highScore){ localStorage.setItem('israel_highscore',score); document.getElementById('highScore').innerText = score; }
+  }
+
+  // Kick off update loop
+  requestAnimationFrame(update);
+
+  // Start/pause buttons
+  document.getElementById('startBtn').addEventListener('click', ()=>{ document.getElementById('menu').style.display='none'; controls.lock(); startGame(); });
+
+  // Simple lighting animation and tiny optimizations
+  setInterval(()=>{ dir.position.x = 5 + Math.sin(performance.now()/5000)*2; dir.position.z = 7 + Math.cos(performance.now()/6000)*2; }, 200);
+
+  // Keep renderer size synced
+  setInterval(onResize, 500);
+
+  // Expose some globals for debugging in console
+  window.scene = scene; window.camera = camera; window.player = player; window.spawnEnemy = spawnEnemy;
+
+  // Initial UI toggles
+  document.getElementById('pauseBtn').innerText = isRunning ? 'Pause' : 'Resume';
+
+  // Initialize feature flags
+  let sfxEnabled = true; let musicEnabledFlag = true;
+  // Apply initial toggles
+  document.getElementById('musicToggle').checked = musicEnabledFlag;
+  document.getElementById('sfxToggle').checked = sfxEnabled;
+
+  // Clean exit before unload
+  window.addEventListener('beforeunload', ()=>{ if(audioCtx && audioCtx.state !== 'closed'){ audioCtx.close(); } });
+
+  // Accessibility: keyboard-only play (when pointer unlocked)
+  // Already supported: WASD, Space, R, F
+  
+  // ========== End of file ==========
+  </script>
+</body>
+</html>
